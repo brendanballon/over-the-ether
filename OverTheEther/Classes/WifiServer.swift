@@ -16,7 +16,7 @@ public class WifiServer: NSObject {
 
     /// The server's name that is visible on the network. Can't be changed, unless you start a new server.
     public private(set) var localName = "" // Is set in startServer(...)
-    private var netService:  NSNetService?
+    private var netService:  NetService?
     private var asyncSocket: GCDAsyncSocket? // We need to keep a reference to the socket in startServer(...). Not used for anything else
 
     private var connectedSockets = [GCDAsyncSocket]()
@@ -40,25 +40,25 @@ public class WifiServer: NSObject {
     - parameter name: The name that other devices on the network will see
     - parameter infoDict: Here you can provide additional information, e.g. about the type of service.
     */
-    public func startServer(name serverName:String, infoDict:[String:NSData]?) {
+    public func startServer(name serverName:String, infoDict:[String:Data]?) {
 
         DDLogInfo("Starting server")
         
         localName = serverName
-        asyncSocket = GCDAsyncSocket(delegate: self, delegateQueue: dispatch_get_main_queue())
+        asyncSocket = GCDAsyncSocket(delegate: self, delegateQueue: DispatchQueue.main)
         
         do {
-            try asyncSocket!.acceptOnPort(0)
+            try asyncSocket!.accept(onPort: 0)
             let port = Int32(asyncSocket!.localPort)
-            netService = NSNetService(domain: "", type: "_filetransfer._tcp", name: serverName, port: port)
+            netService = NetService(domain: "", type: "_filetransfer._tcp", name: serverName, port: port)
             netService!.delegate = self
             netService!.includesPeerToPeer = true
             netService!.publish()
             isHosting = true
 
             if let info = infoDict {
-                let txtData = NSNetService.dataFromTXTRecordDictionary(info)
-                netService!.setTXTRecordData(txtData)
+                let txtData = NetService.data(fromTXTRecord: info)
+                netService!.setTXTRecord(txtData)
             }
 
         } catch {
@@ -85,16 +85,16 @@ public class WifiServer: NSObject {
     /** Send an object to all connected clients
     */
     public func broadCastObject(object:NSCoding) {
-        let data = NSKeyedArchiver.archivedDataWithRootObject(object)
-        broadCastData(data)
+        let data = NSKeyedArchiver.archivedData(withRootObject: object)
+        broadCastData(data: data)
     }
 
 
     /** Send an object only to a single client
     */
     public func sendObject(object:NSCoding, toClient client:GCDAsyncSocket) {
-        let data = NSKeyedArchiver.archivedDataWithRootObject(object)
-        sendData(data, toClient:client)
+        let data = NSKeyedArchiver.archivedData(withRootObject: object)
+        sendData(data: data, toClient:client)
     }
 
 
@@ -103,39 +103,44 @@ public class WifiServer: NSObject {
     */
     public func rename(to newName:String) {
         stopServer()
-        let delayTime = dispatch_time(DISPATCH_TIME_NOW, Int64(1 * Double(NSEC_PER_SEC)))
+        //let delayTime = dispatch_time_t(DISPATCH_TIME_NOW, Int64(1 * Double(NSEC_PER_SEC)))
+        //let delayTime = dispatch_time_t(dispatch_time(DispatchTime.now()))
         let s = self
-        dispatch_after(delayTime, dispatch_get_main_queue()) {
-            s.startServer(name: newName, infoDict: nil) //FIXME: use original dict
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { // Change `2.0` to the desired number of seconds.
+           // Code you want to be delayed
+            s.startServer(name: newName, infoDict: nil)
         }
+        /*dispatch_after(delayTime, dispatch_get_main_queue()) {
+            s.startServer(name: newName, infoDict: nil) //FIXME: use original dict
+        }*/
     }
 
 
     // MARK: - Private methods
 
-    private func broadCastData(data:NSData) {
+    private func broadCastData(data:Data) {
         DDLogInfo("Sending out broadcast...")
         for clientSocket in connectedSockets {
-            sendData(data, toClient: clientSocket)
+            sendData(data: data, toClient: clientSocket)
         }
     }
 
-    private func sendData(data:NSData, toClient client:GCDAsyncSocket) {
+    private func sendData(data:Data, toClient client:GCDAsyncSocket) {
         let limit = 100000 // Number of bytes after which Internet is preferred to BT
-        let shouldSendViaInternet = !isWifiConnected() && data.length > limit
+        let shouldSendViaInternet = !isWifiConnected() && data.count > limit
 
         // Send via BT or Wifi
         if !shouldSendViaInternet {
             for clientSocket in connectedSockets {
                 if clientSocket == client {
-                    let length = "\(data.length)".dataUsingEncoding(NSUTF8StringEncoding, allowLossyConversion: false)
+                    let length = "\(data.count)".data(using: String.Encoding.utf8, allowLossyConversion: false)
 
                     let mutable = NSMutableData(data: length!)
-                    mutable.appendData(GCDAsyncSocket.CRLFData())
-                    let header = NSData(bytes: mutable.bytes, length: mutable.length)
+                    mutable.append(GCDAsyncSocket.crlfData())
+                    let header = Data(bytes: mutable.bytes, count: mutable.length)
 
-                    clientSocket.writeData(header, withTimeout: -1, tag: WifiClient._k_headerTag)
-                    clientSocket.writeData(data, withTimeout: -1, tag: WifiClient._k_dataTag)
+                    clientSocket.write(header, withTimeout: -1, tag: WifiClient._k_headerTag)
+                    clientSocket.write(data, withTimeout: -1, tag: WifiClient._k_dataTag)
 
                     DDLogVerbose("Sending data to \(clientSocket)")
                 }
@@ -148,24 +153,24 @@ public class WifiServer: NSObject {
 
             let pc = ParseClient()
 
-            let p:Double -> Void = { (p:Double) in self.delegate?.transferDidProgress(p) }
+            let p:(Double) -> Void = { (p:Double) in self.delegate?.transferDidProgress(percent: p) }
 
             let c = { (error:NSError?, uuid:String) -> Void in
                 if let e = error {
                     DDLogError("Upload failed: \(e)")
                 } else {
-                    self.delegate?.transferDidProgress(1.0)
+                    self.delegate?.transferDidProgress(percent: 1.0)
 
-                    let idOpt = NSUUID(UUIDString: uuid)
+                    let idOpt = NSUUID(uuidString: uuid)
                     if let id = idOpt {
-                        self.sendObject(id, toClient: client)
+                        self.sendObject(object: id, toClient: client)
                     } else {
                         DDLogError("ID String is not a valid UUID")
                     }
                 }
             }
 
-            pc.uploadFile(data, progress: p, completion: c)
+            pc.uploadFile(data: data, progress: p, completion: c)
         }
     }
     
@@ -177,13 +182,13 @@ public class WifiServer: NSObject {
     }
 
     private func acknowledgePing(sender:GCDAsyncSocket) {
-        sendObject(WifiClient._k_pingPacket, toClient: sender)
+        sendObject(object: WifiClient._k_pingPacket as NSCoding, toClient: sender)
     }
 
     private func receivedFile(sender:GCDAsyncSocket) {
 
         defer {
-            cleanUp(sender)
+            cleanUp(sender: sender)
         }
 
         guard let data = assembledData[sender]
@@ -192,30 +197,30 @@ public class WifiServer: NSObject {
                 return
         }
 
-        let unarchived = NSKeyedUnarchiver.unarchiveObjectWithData(data)
+        let unarchived = NSKeyedUnarchiver.unarchiveObject(with: data as Data)
 
-        if isPing(unarchived) {
-            acknowledgePing(sender)
+        if isPing(data: unarchived as AnyObject?) {
+            acknowledgePing(sender: sender)
         } else if let shake = unarchived as? HandShake {
             doHandshake(answer: shake, client: sender)
         } else if let id = unarchived as? NSUUID {
 
             let pc = ParseClient()
 
-            let p:Double->Void = { (progress) in self.delegate?.transferDidProgress(progress) }
+            let p:(Double)->Void = { (progress) in self.delegate?.transferDidProgress(percent: progress) }
 
-            let c = { (error:NSError?, data:NSData) in
+            let c = { (error:NSError?, data:Data) in
                 if let e = error {
                     DDLogError("Error Downloading: \(e)")
                 } else {
-                    let obj = NSKeyedUnarchiver.unarchiveObjectWithData(data)
-                    self.delegate?.didReceiveData(obj, fromClient: sender)
+                    let obj = NSKeyedUnarchiver.unarchiveObject(with: data)
+                    self.delegate?.didReceiveData(data: AnyObject.self as AnyObject, fromClient: sender)
                 }
             }
 
-            pc.downloadFile(withUUID: id.UUIDString, progress: p, completion: c)
+            pc.downloadFile(withUUID: id.uuidString, progress: p, completion: c)
         } else {
-            delegate?.didReceiveData(unarchived, fromClient: sender)
+            delegate?.didReceiveData(data: AnyObject.self as AnyObject, fromClient: sender)
         }
     }
 
@@ -236,38 +241,40 @@ public class WifiServer: NSObject {
                 reply = HandShake(type: .ACKNoPinIsNotNeeded)
             }
 
-            sendObject(reply, toClient: client)
+            sendObject(object: reply, toClient: client)
         }
 
         if msg.type == .ACKClientIsAbleToSend {
-            delegate?.clientConnected(client)
+            delegate?.clientConnected(client: client)
         }
     }
 
-    private func stripHeader(header:NSData) -> NSData {
+    private func stripHeader(header:Data) -> Data {
         // Remove the CRLF from the header
-        return header.subdataWithRange(NSMakeRange(0, header.length - 2))
+        return header.subdata(in: 0..<header.count-2)
+        //(NSMakeRange(0, header.length - 2))
     }
 
     private func cleanUp(sender:GCDAsyncSocket) {
-        byteCounter.removeValueForKey(sender)
-        dataLength.removeValueForKey(sender)
-        assembledData.removeValueForKey(sender)
+        //byteCounter.removeValueForKey(sender)
+        byteCounter.removeValue(forKey: sender)
+        dataLength.removeValue(forKey: sender)
+        assembledData.removeValue(forKey: sender)
     }
 }
 
 
 
 
-// MARK: - NSNetService Delegate methods
+// MARK: - NetService Delegate methods
 
-extension WifiServer : NSNetServiceDelegate {
+extension WifiServer : NetServiceDelegate {
 
-    public func netServiceDidPublish(sender: NSNetService) {
+    public func netServiceDidPublish(sender: NetService) {
         DDLogInfo("NetService published with name '\(sender.name)'")
     }
 
-    public func netService(sender: NSNetService, didNotPublish errorDict: [String : NSNumber]) {
+    public func netService(sender: NetService, didNotPublish errorDict: [String : NSNumber]) {
         DDLogError("NetService did not publish")
 
         //FIXME: What to do here? Just publishing again doesn't seem to allow clients to connect
@@ -281,15 +288,15 @@ extension WifiServer : NSNetServiceDelegate {
 
 extension WifiServer : GCDAsyncSocketDelegate {
 
-    public func socket(sender:GCDAsyncSocket, didReadData data:NSData, withTag tag:Int) {
+    public func socket(sender:GCDAsyncSocket, didReadData data:Data, withTag tag:Int) {
 
         // Header came in
         if tag == WifiClient._k_headerTag {
             DDLogVerbose("Received Header")
 
-            let stripped = stripHeader(data)
+            let stripped = stripHeader(header: data)
 
-            guard let header = String(data: stripped, encoding: NSUTF8StringEncoding)
+            guard let header = String(data: stripped, encoding: String.Encoding.utf8)
                 else { DDLogError("Malformed Header by Server. Stopped reading. (\(stripped))") ; return }
 
             guard let length = Int(header)
@@ -301,7 +308,7 @@ extension WifiServer : GCDAsyncSocketDelegate {
             dataLength[sender] = length
             assembledData[sender] = NSMutableData()
 
-            sender.readDataWithTimeout(-1, tag: WifiClient._k_dataTag)
+            sender.readData(withTimeout: -1, tag: WifiClient._k_dataTag)
         }
 
             // Data came in
@@ -315,39 +322,45 @@ extension WifiServer : GCDAsyncSocketDelegate {
             guard let length = dataLength[sender]
                 else { DDLogError("Servers dataLength is nil") ; return }
 
-            assembling.appendData(data)
-            byteCounter[sender]! += data.length
+            assembling.append(data)
+            byteCounter[sender]! += data.count
 
             let percent = Double(byteCounter[sender]!)/Double(length)
-            delegate?.transferDidProgress(percent)
+            delegate?.transferDidProgress(percent: percent)
 
             // Transmitted entire file
-            if (dataLength[sender] > 0) && (byteCounter[sender] >= dataLength[sender]) {
-                receivedFile(sender)
-                sender.readDataToData(GCDAsyncSocket.CRLFData(), withTimeout: -1, tag: WifiClient._k_headerTag)
+            if dataLength[sender] ?? 0 > 0 && (byteCounter[sender] ?? 0) > (dataLength[sender] ?? 0) {
+                receivedFile(sender: sender)
+                sender.readData(to: GCDAsyncSocket.crlfData(), withTimeout: -1, tag: WifiClient._k_headerTag)
             } else {
-                sender.readDataWithTimeout(-1, tag: WifiClient._k_dataTag)
-            }
+            sender.readData(withTimeout: -1, tag: WifiClient._k_dataTag)
+                /*if (dataLength[sender]! > 0) && (byteCounter[sender] >= dataLength[sender]) {
+                receivedFile(sender: sender)
+                sender.readData(to: GCDAsyncSocket.crlfData(), withTimeout: -1, tag: WifiClient._k_headerTag)
+            } else {
+                sender.readData(withTimeout: -1, tag: WifiClient._k_dataTag)
+            }*/
         }
     }
 
-    public func socket(sock: GCDAsyncSocket, didAcceptNewSocket newSocket: GCDAsyncSocket) {
-        DDLogInfo("Socket \(sock) accepted new socket \(newSocket) with IP \(newSocket.connectedHost) (local: \(newSocket.localHost)")
+    func socket(_ sock: GCDAsyncSocket, didAcceptNewSocket newSocket: GCDAsyncSocket) {
+        DDLogInfo("Socket \(sock) accepted new socket \(newSocket) with IP \(String(describing: newSocket.connectedHost)) (local: \(String(describing: newSocket.localHost))")
         connectedSockets.append(newSocket)
         newSocket.delegate = self
 
         /* It is essential to start reading with the header tag, because the other side will always send the
         size of the data first. Since this is the first time the server comes in contact with the client,
         the first data we will see will certainly be the header (i.e. the size) of some other data */
-        newSocket.readDataToData(GCDAsyncSocket.CRLFData(), withTimeout: -1, tag: WifiClient._k_headerTag)
+        newSocket.readData(to: GCDAsyncSocket.crlfData(), withTimeout: -1, tag: WifiClient._k_headerTag)
     }
 
-    public func socketDidDisconnect(sock: GCDAsyncSocket, withError: NSError?) {
-        DDLogInfo("Socket \(sock) with IP \(sock.connectedHost) did disconnect")
-        delegate?.clientDisconnected(sock)
+    func socketDidDisconnect(sock: GCDAsyncSocket, withError: NSError?) {
+        DDLogInfo("Socket \(sock) with IP \(String(describing: sock.connectedHost)) did disconnect")
+        delegate?.clientDisconnected(client: sock)
     }
     
-    public func socket(sock:GCDAsyncSocket, didWriteDataWithTag tag:Int) {
+    func socket(_ sock:GCDAsyncSocket, didWriteDataWithTag tag:Int) {
         DDLogVerbose("Socket \(sock) wrote data with tag \(tag)")
     }
+}
 }

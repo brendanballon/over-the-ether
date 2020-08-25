@@ -19,22 +19,22 @@ public class WifiClient: NSObject {
 
     public weak var delegate:WifiClientDelegate?
 
-    private var netServiceBrowser = NSNetServiceBrowser()
-    private var serverService:NSNetService?
-    private var serverAddresses = [NSData]()
-    private var asyncSocket:GCDAsyncSocket?
+    private var netServiceBrowser = NetServiceBrowser()
+    private var serverService: NetService?
+    private var serverAddresses = [Data]()
+    private var asyncSocket: GCDAsyncSocket?
 
-    private var incomingDataLength  = 0
+    private var incomingDataLength = 0
     private var incomingByteCounter = 0
-    private var assembledData       = NSMutableData()
+    private var assembledData = NSMutableData()
 
-    private var outgoingDataLength  = 0
+    private var outgoingDataLength = 0
     private var outgoingDataCounter = 0
     
-    private var serversFound = [NSNetService]()
+    private var serversFound = [NetService]()
 
     private var pingWasAcknowledgedByServer = false
-    private var pingTimedOut                = true
+    @objc private var pingTimedOut                = true
 
     /// Returns false if the server is passcode protected
     public var isAllowedToSend:Bool {
@@ -77,8 +77,8 @@ public class WifiClient: NSObject {
 
         if isAllowedToSend || object is HandShake {
             DDLogVerbose("Sending an object...")
-            let data = NSKeyedArchiver.archivedDataWithRootObject(object)
-            sendData(data)
+            let data = NSKeyedArchiver.archivedData(withRootObject: object)
+            sendData(data: data as Data)
         } else {
             DDLogWarn("Not allowed to send file")
         }
@@ -92,7 +92,7 @@ public class WifiClient: NSObject {
         DDLogInfo("Discover servers...")
         serversFound.removeAll()
         netServiceBrowser.stop()
-        netServiceBrowser.searchForServicesOfType("_filetransfer._tcp", inDomain: "")
+        netServiceBrowser.searchForServices(ofType: "_filetransfer._tcp", inDomain: "")
     }
 
 
@@ -114,7 +114,7 @@ public class WifiClient: NSObject {
         if (correct.count > 0) {
             serverService = correct[0]
             serverService!.delegate = self
-            serverService!.resolveWithTimeout(5.0)
+            serverService!.resolve(withTimeout: 5.0)
         }
         else {
             DDLogError("Couldn't find server with specified name")
@@ -139,20 +139,20 @@ public class WifiClient: NSObject {
      */
     public func pingConnectedServer(timeout:Double) {
         pingTimedOut = false
-        sendObject(WifiClient._k_pingPacket)
-        _ = NSTimer.scheduledTimerWithTimeInterval(timeout, target: self, selector: #selector(WifiClient.pingTimedOut), userInfo: nil, repeats: false)
+        sendObject(object: WifiClient._k_pingPacket as NSCoding)
+        _ = Timer.scheduledTimer(timeInterval: timeout, target: self, selector: #selector(getter: WifiClient.pingTimedOut), userInfo: nil, repeats: false)
     }
 
 
     /** Get additional info about the service (if the server decided to provide it)
     - returns: The TXT record of the underlying NSNetService or nil (if the service is nil)
     */
-    public func getServiceInfo() -> [String:NSData]? {
+    public func getServiceInfo() -> [String:Data]? {
         guard let service = serverService
             else { DDLogError("ServerService is nil") ; return nil }
 
-        if let x = service.TXTRecordData() {
-            return NSNetService.dictionaryFromTXTRecordData(x)
+        if let x = service.txtRecordData() {
+            return NetService.dictionary(fromTXTRecord: x) as [String : Data]
         } else {
             return nil
         }
@@ -172,23 +172,23 @@ public class WifiClient: NSObject {
 
     // MARK: - Private methods
 
-    private func sendData(data:NSData) {
+    private func sendData(data:Data) {
         let limit = 100_000 // Number of bytes after which Internet is preferred to BT
-        let shouldSendLocally = isWifiConnected() || data.length < limit
+        let shouldSendLocally = isWifiConnected() || data.count < limit
 
         // Send via BT or Wifi
         if shouldSendLocally {
             guard let socket = asyncSocket
                 else { DDLogError("AsyncSocket is NIL!") ; return }
 
-            outgoingDataLength = data.length
-            let length = "\(data.length)".dataUsingEncoding(NSUTF8StringEncoding, allowLossyConversion: false)
+            outgoingDataLength = data.count
+            let length = "\(data.count)".data(using: String.Encoding.utf8, allowLossyConversion: false)
             let mutable = NSMutableData(data: length!)
-            mutable.appendData(GCDAsyncSocket.CRLFData())
-            let header = NSData(bytes: mutable.bytes, length: mutable.length)
+            mutable.append(GCDAsyncSocket.crlfData())
+            let header = Data(bytes: mutable.bytes, count: mutable.length)
 
-            socket.writeData(header, withTimeout: -1, tag: WifiClient._k_headerTag)
-            socket.writeData(data, withTimeout: -1, tag: WifiClient._k_dataTag)
+            socket.write(header as Data, withTimeout: -1, tag: WifiClient._k_headerTag)
+            socket.write(data as Data, withTimeout: -1, tag: WifiClient._k_dataTag)
         }
 
         // Send via Internet
@@ -197,24 +197,24 @@ public class WifiClient: NSObject {
 
             let pc = ParseClient()
 
-            let p:Double -> Void = { (p:Double) in self.delegate?.transferToServerDidProgress(p) }
+            let p:(Double) -> Void = { (p:Double) in self.delegate?.transferToServerDidProgress(percent: p) }
 
             let c = { (error:NSError?, uuid:String) -> Void in
                 if let e = error {
                     DDLogError("Upload failed: \(e)")
                 } else {
-                    self.delegate?.transferToServerDidProgress(1.0)
+                    self.delegate?.transferToServerDidProgress(percent: 1.0)
 
-                    let idOpt = NSUUID(UUIDString: uuid)
+                    let idOpt = NSUUID(uuidString: uuid)
                     if let id = idOpt {
-                        self.sendObject(id)
+                        self.sendObject(object: id)
                     } else {
                         DDLogError("ID String is not a valid UUID")
                     }
                 }
             }
 
-            pc.uploadFile(data, progress: p, completion: c)
+            pc.uploadFile(data: data, progress: p, completion: c)
         }
 
         else {
@@ -224,11 +224,11 @@ public class WifiClient: NSObject {
     }
 
     private func receivedFile() {
-        let file = NSKeyedUnarchiver.unarchiveObjectWithData(assembledData)
+        let file = NSKeyedUnarchiver.unarchiveObject(with: assembledData as Data)
 
-        let notifyDelegate = didReceiveObjectFromServer(file)
+        let notifyDelegate = didReceiveObjectFromServer(object: file as AnyObject?)
         if notifyDelegate {
-            delegate?.didReceiveObjectFromServer(file)
+            delegate?.didReceiveObjectFromServer(object: file as AnyObject?)
         }
 
         incomingByteCounter = 0
@@ -242,7 +242,7 @@ public class WifiClient: NSObject {
         if let c = object as? String {
             if c == WifiClient._k_pingPacket && pingTimedOut == false {
                 pingWasAcknowledgedByServer = true
-                delegate?.pingReturned(true)
+                delegate?.pingReturned(val: true)
                 DDLogInfo("Ping was acknowledged by server")
                 return false
             } else {
@@ -256,29 +256,29 @@ public class WifiClient: NSObject {
 
             let pc = ParseClient()
 
-            let p:Double->Void = { (progress) in self.delegate?.transferFromServerDidProgress(progress) }
+            let p:(Double)->Void = { (progress) in self.delegate?.transferFromServerDidProgress(percent: progress) }
 
-            let c = { (error:NSError?, data:NSData) in
+            let c = { (error:NSError?, data:Data) in
                 if let e = error {
                     DDLogError("Error Downloading: \(e)")
                 } else {
-                    let obj = NSKeyedUnarchiver.unarchiveObjectWithData(data)
-                    self.delegate?.didReceiveObjectFromServer(obj)
+                    let obj = NSKeyedUnarchiver.unarchiveObject(with: data as Data)
+                    self.delegate?.didReceiveObjectFromServer(object: obj as AnyObject?)
                 }
             }
 
-            pc.downloadFile(withUUID: id.UUIDString, progress: p, completion: c)
+            pc.downloadFile(withUUID: id.uuidString, progress: p, completion: c)
         }
 
         return true
     }
 
-    @objc private func pingTimedOut(timer:NSTimer) {
+    @objc private func pingTimedOut(timer:Timer) {
 
         pingTimedOut = true
 
         if pingWasAcknowledgedByServer == false {
-            delegate?.pingReturned(false)
+            delegate?.pingReturned(val: false)
             DDLogWarn("Ping to server timed out")
         }
         // else, the delegate was already notified that the server answered
@@ -302,7 +302,7 @@ public class WifiClient: NSObject {
             DDLogVerbose("Attempting connection to\(addr)")
 
             do {
-                try socket.connectToAddress(addr)
+                try socket.connect(toAddress: addr as Data)
                 done = true
             }
             catch {
@@ -323,7 +323,7 @@ public class WifiClient: NSObject {
         if msg == nil {
             DDLogInfo("Begin Negotiation: Ask Server if PIN is required.")
             let negotiation = HandShake(type: .REQAskIfPinIsNeeded)
-            sendObject(negotiation)
+            sendObject(object: negotiation)
         }
 
         //Server answered with message m
@@ -341,19 +341,19 @@ public class WifiClient: NSObject {
             if m.type == .ACKYesPinIsNeeded {
                 DDLogInfo("Server answered in Negotiation: Pin IS required.")
                 requiredPasscode = m.passcode
-                delegate?.connectionToServerFailed(.RequiresPasscode)
+                delegate?.connectionToServerFailed(reason: .RequiresPasscode)
             }
         }
     }
 
-    private func stripHeader(header:NSData) -> NSData {
+    private func stripHeader(header:Data) -> Data {
         // Remove the CRLF from the header
-        return header.subdataWithRange(NSMakeRange(0, header.length - 2))
+        return header.subdata(in: 0..<header.count-2)
     }
 
     private func tellServerImConnected() {
         let shake = HandShake(type: .ACKClientIsAbleToSend)
-        sendObject(shake)
+        sendObject(object: shake)
     }
 }
 
@@ -364,14 +364,14 @@ public class WifiClient: NSObject {
 
 extension WifiClient : GCDAsyncSocketDelegate {
 
-    public func socket(sender:GCDAsyncSocket, didReadData data:NSData, withTag tag:Int) {
+    public func socket(sender:GCDAsyncSocket, didReadData data:Data, withTag tag:Int) {
 
         // Header came in
         if tag == WifiClient._k_headerTag {
 
-            let stripped = stripHeader(data)
+            let stripped = stripHeader(header: data)
 
-            guard let header = String(data: stripped, encoding: NSUTF8StringEncoding)
+            guard let header = String(data: stripped as Data, encoding: String.Encoding.utf8)
                 else { DDLogError("Malformed Header by Server. Stopped reading. (1) : \(data)") ; return }
 
             guard let length = Int(header)
@@ -381,36 +381,36 @@ extension WifiClient : GCDAsyncSocketDelegate {
             incomingDataLength = length
             assembledData = NSMutableData()
 
-            sender.readDataWithTimeout(-1, tag: WifiClient._k_dataTag)
+            sender.readData(withTimeout: -1, tag: WifiClient._k_dataTag)
         }
 
             // Data came in
         else {
-            assembledData.appendData(data)
-            incomingByteCounter += data.length
+            assembledData.append(data as Data)
+            incomingByteCounter += data.count
 
             let percent = Double(incomingByteCounter)/Double(incomingDataLength)
-            delegate?.transferFromServerDidProgress(percent)
+            delegate?.transferFromServerDidProgress(percent: percent)
 
             // Transmitted entire file
             if (incomingDataLength > 0 && incomingByteCounter >= incomingDataLength) {
                 receivedFile()
-                sender.readDataToData(GCDAsyncSocket.CRLFData(), withTimeout: -1, tag: WifiClient._k_headerTag)
+                sender.readData(to: GCDAsyncSocket.crlfData(), withTimeout: -1, tag: WifiClient._k_headerTag)
             } else {
-                sender.readDataWithTimeout(-1, tag: WifiClient._k_dataTag)
+                sender.readData(withTimeout: -1, tag: WifiClient._k_dataTag)
             }
         }
     }
 
-    public func socket(sock:GCDAsyncSocket, didWritePartialDataOfLength partialLength:UInt, tag:Int) {
+    public func socket(_ sock:GCDAsyncSocket, didWritePartialDataOfLength partialLength:UInt, tag:Int) {
         guard tag == WifiClient._k_dataTag else { return }
 
         outgoingDataCounter += Int(partialLength)
         let percent = (Double(outgoingDataCounter) / Double(outgoingDataLength))
-        delegate?.transferToServerDidProgress(percent)
+        delegate?.transferToServerDidProgress(percent: percent)
     }
 
-    public func socket(socket: GCDAsyncSocket, didConnectToHost host:String, port p:UInt16) {
+    public func socket(_ socket: GCDAsyncSocket, didConnectToHost host:String, port p:UInt16) {
         DDLogInfo("Socket connected to host: \(host) Port: \(p)")
         asyncSocket = socket
         socket.delegate = self
@@ -418,18 +418,18 @@ extension WifiClient : GCDAsyncSocketDelegate {
         /* It is essential to start reading with the header tag, because the other side will always send the
          size of the data first. Since this is the first time the client comes in contact with the server,
          the first data we will see will certainly be the header (i.e. the size) of some other data */
-        socket.readDataToData(GCDAsyncSocket.CRLFData(), withTimeout: -1, tag: WifiClient._k_headerTag)
+        socket.readData(to: GCDAsyncSocket.crlfData(), withTimeout: -1, tag: WifiClient._k_headerTag)
 
         // Ask for permission to send files
         doHandshake(answer:nil)
     }
 
-    public func socket(sock:GCDAsyncSocket, didWriteDataWithTag tag:Int) {
+    public func socket(_ sock:GCDAsyncSocket, didWriteDataWithTag tag:Int) {
         DDLogVerbose("Socket wrote data with tag \(tag)")
         if tag == WifiClient._k_dataTag {
             outgoingDataLength  = 0
             outgoingDataCounter = 0
-            delegate?.transferToServerDidProgress(1.0)
+            delegate?.transferToServerDidProgress(percent: 1.0)
         }
     }
     
@@ -443,9 +443,9 @@ extension WifiClient : GCDAsyncSocketDelegate {
 
 // MARK: - NSNetService Delegate
 
-extension WifiClient : NSNetServiceDelegate {
+extension WifiClient : NetServiceDelegate {
 
-    public func netServiceDidResolveAddress(sender: NSNetService) {
+    public func netServiceDidResolveAddress(_ sender: NetService) {
         DDLogVerbose("Did resolve")
 
         guard let addresses = sender.addresses
@@ -453,11 +453,11 @@ extension WifiClient : NSNetServiceDelegate {
 
         serverAddresses = addresses
 
-        asyncSocket = GCDAsyncSocket(delegate: self, delegateQueue: dispatch_get_main_queue())
+        asyncSocket = GCDAsyncSocket(delegate: self, delegateQueue: .main)
         connectToNextAddress()
     }
 
-    public func netService(sender: NSNetService, didNotResolve errorDict: [String : NSNumber]) {
+    public func netService(sender: NetService, didNotResolve errorDict: [String : NSNumber]) {
         DDLogError("Did not resolve")
     }
 }
@@ -467,29 +467,29 @@ extension WifiClient : NSNetServiceDelegate {
 
 // MARK: - NSNetServiceBrowser Delegate
 
-extension WifiClient : NSNetServiceBrowserDelegate {
+extension WifiClient : NetServiceBrowserDelegate {
 
-    public func netServiceBrowser(aNetServiceBrowser: NSNetServiceBrowser, didFindService aNetService: NSNetService, moreComing: Bool) {
+    public func netServiceBrowser(aNetServiceBrowser: NetServiceBrowser, didFindService aNetService: NetService, moreComing: Bool) {
         DDLogVerbose("Found service. More coming: \(moreComing)")
 
         serversFound.append(aNetService)
         if moreComing == false {
             let serverNames = serversFound.map({server in "\(server.name)"})
-            delegate?.discoveredListOfServers(serverNames)
+            delegate?.discoveredListOfServers(servers: serverNames)
         }
     }
 
-    public func netServiceBrowser(aNetServiceBrowser: NSNetServiceBrowser, didRemoveService aNetService: NSNetService, moreComing: Bool) {
+    public func netServiceBrowser(aNetServiceBrowser: NetServiceBrowser, didRemoveService aNetService: NetService, moreComing: Bool) {
         DDLogWarn("Lost Connection to Server")
-        serversFound.removeObject(aNetService)
-        delegate?.lostConnectionToServer(aNetService.name)
+        serversFound.remove(element: aNetService)
+        delegate?.lostConnectionToServer(name: aNetService.name)
     }
 
-    public func netServiceBrowserDidStopSearch(aNetServiceBrowser: NSNetServiceBrowser) {
+    public func netServiceBrowserDidStopSearch(aNetServiceBrowser: NetServiceBrowser) {
         DDLogVerbose("Stopped searching")
     }
 
-    public func netServiceBrowser(aNetServiceBrowser: NSNetServiceBrowser, didNotSearch errorDict: [String : NSNumber]) {
+    public func netServiceBrowser(aNetServiceBrowser: NetServiceBrowser, didNotSearch errorDict: [String : NSNumber]) {
         DDLogError("NetService browser did not search: \(errorDict)")
     }
 }

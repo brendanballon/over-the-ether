@@ -10,15 +10,13 @@ import Foundation
 
 /// String contains the uuid that is used to id data on server
 typealias CompletionUploadBlock = (NSError?, String) -> Void
-
-typealias CompletionDownloadBlock = (NSError?, NSData) -> Void
+typealias CompletionDownloadBlock = (NSError?, Data) -> Void
 
 /// Double must be between 0.0 and 1.0
-typealias ProgressBlock = Double -> Void
-
+typealias ProgressBlock = (Double) -> Void
 
 protocol BaaSClient {
     init()
-    func uploadFile(data:NSData, progress:ProgressBlock?, completion:CompletionUploadBlock)
-    func downloadFile(withUUID uuid:String, progress:ProgressBlock?, completion:CompletionDownloadBlock)
+    func uploadFile(data:Data, progress: ProgressBlock?, completion: @escaping CompletionUploadBlock)
+    func downloadFile(withUUID uuid:String, progress:ProgressBlock?, completion: @escaping CompletionDownloadBlock)
 }

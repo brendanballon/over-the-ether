@@ -40,14 +40,14 @@ class HandShake : NSObject, NSCoding {
         self.type = type
     }
 
-    required init(coder aDecoder:NSCoder) {
-        type = MessageType(rawValue: aDecoder.decodeObjectForKey("type") as! String)!
-        passcode = aDecoder.decodeObjectForKey("passcode") as? String
+    required init(coder aDecoder: NSCoder) {
+        type = MessageType(rawValue: aDecoder.decodeObject(forKey: "type") as! String)!
+        passcode = aDecoder.decodeObject(forKey: "passcode") as? String
     }
 
-    func encodeWithCoder(aCoder: NSCoder) {
-        aCoder.encodeObject(type.rawValue, forKey: "type")
-        aCoder.encodeObject(passcode, forKey: "passcode")
+    func encode(with coder: NSCoder) {
+        coder.encode(type.rawValue, forKey: "type")
+        coder.encode(passcode, forKey: "passcode")
     }
 }
 

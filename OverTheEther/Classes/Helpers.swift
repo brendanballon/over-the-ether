@@ -12,11 +12,21 @@ import SystemConfiguration
 /*
 Swift doesn't yet have an array.removeObject() method, so here is one. Removes the first occurence only.
 (from http://stackoverflow.com/questions/24938948/array-extension-to-remove-object-by-value )
-*/
+ 
 extension RangeReplaceableCollectionType where Generator.Element : Equatable {
-    mutating func removeObject(object : Generator.Element) {
+    @discardableResult
+    mutating func remove(_ element: Generator.Element) {
         if let index = self.indexOf(object) {
             self.removeAtIndex(index)
+        }
+    }
+}
+*/
+
+extension Array where Element: Equatable{
+    mutating func remove (element: Element) {
+        if let i = self.firstIndex(of: element) {
+            self.remove(at: i)
         }
     }
 }
@@ -43,7 +53,8 @@ public func isInternetConnected() -> Bool {
 
 public func isWifiConnected() -> Bool {
     let r = Reach()
-    return r.connectionStatus().description == ReachabilityStatus.Online(ReachabilityType.WiFi).description
+    return r.connectionStatus().description == //ReachabilityStatus.Online(ReachabilityType.WiFi).description
+        ReachabilityStatus.online(ReachabilityType.wiFi).description
 }
 
 /*
